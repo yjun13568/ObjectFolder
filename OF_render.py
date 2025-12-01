@@ -35,7 +35,7 @@ def config_parser():
     parser.add_argument("--KiloOSF", action="store_true")
 
     # VisionNet options
-    parser.add_argument("--vision_test_file_path", default='data/vision_demo.npy', help='The path of the testing file for vision, which should be a npy file.')
+    parser.add_argument("--vision_test_file_path", default='./demo/touch_vertices.npy', help='The path of the testing file for vision, which should be a npy file.')
     parser.add_argument("--vision_results_dir", type=str, default='./results/vision/', help='The path of the vision results directory to save rendered images.')
 
     # AudioNet options
@@ -44,8 +44,8 @@ def config_parser():
     parser.add_argument("--audio_results_dir", type=str, default='./results/audio/', help='The path of the audio results directory to save impact sounds.')
 
     # TouchNet options
-    parser.add_argument('--touch_vertices_file_path', default='./data/touch_demo_vertices.npy', help='The path of the testing vertices file for touch, which should be a npy file.')
-    parser.add_argument('--touch_gelinfo_file_path', default='./data/touch_demo_gelinfo.npy', help='The path of the gel configurations for touch, which should be a npy file.')
+    parser.add_argument('--touch_vertices_file_path', default='./demo/touch_vertices.npy', help='The path of the testing vertices file for touch, which should be a npy file.')
+    parser.add_argument('--touch_gelinfo_file_path', default='./demo/touch_gelinfo.npy', help='The path of the gel configurations for touch, which should be a npy file.')
     parser.add_argument('--touch_results_dir', type=str, default='./results/touch/', help='The path of the touch results directory to save rendered tactile RGB images.')
 
     return parser
@@ -281,7 +281,7 @@ def TouchNet_eval(args):
     theta, phi, displacement = gelinfo_data[:, 0], gelinfo_data[:, 1], gelinfo_data[:, 2]
     phi_x = np.cos(phi)
     phi_y = np.sin(phi)
-
+    
     # normalize theta to [-1, 1]
     theta = (theta - np.radians(0)) / (np.radians(rotation_max) - np.radians(0))
 
@@ -290,7 +290,7 @@ def TouchNet_eval(args):
 
     #normalize coordinates to [-1,1]
     vertex_coordinates = (vertex_coordinates - vertex_min) / (vertex_max - vertex_min)
-
+    
     #initialize horizontal and vertical features
     w_feats = np.repeat(np.repeat(np.arange(rgb_width).reshape((rgb_width, 1)), rgb_height, axis=1).reshape((1, 1, rgb_width, rgb_height)), N, axis=0)
     h_feats = np.repeat(np.repeat(np.arange(rgb_height).reshape((1, rgb_height)), rgb_width, axis=0).reshape((1, 1, rgb_width, rgb_height)), N, axis=0)
