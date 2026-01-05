@@ -25,6 +25,7 @@ import TouchNet_utils
 import TouchNet_model
 import VisionNet_utils
 from utils import *
+import cv2
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -342,9 +343,10 @@ def TouchNet_eval(args):
     taxim = TaximRender("./calibs/")
     for i in trange(N):
         height_map, contact_map, tactile_map = taxim.render(preds[i], displacement[i])
-        tactile_map = Image.fromarray(tactile_map.astype(np.uint8), 'RGB')
-        filename = os.path.join(testsavedir, '{}.png'.format(i+1))
-        tactile_map.save(filename)
+        cv2.imwrite(os.path.join(testsavedir, f'{i+1}.png'), tactile_map)
+        #tactile_map = Image.fromarray(tactile_map.astype(np.uint8), 'RGB')
+        #filename = os.path.join(testsavedir, '{}.png'.format(i+1))
+        #tactile_map.save(filename)
 
 if __name__ =='__main__':
     parser = config_parser()
