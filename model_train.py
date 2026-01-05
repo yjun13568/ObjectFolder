@@ -932,7 +932,7 @@ def TouchNet_train(args):
         avg_loss = batch_loss / len(dataloader)
         scheduler.step(avg_loss)
         epoch_losses.append(avg_loss)
-        if (epoch+1) % 5 ==0:
+        if (i+1) % 5 ==0:
             lr = optimizer.param_groups[0]["lr"]
             print(f"Epoch {i+1} | Average Loss: {avg_loss:.5f}, LR: {lr:.6f}")
 
