@@ -288,7 +288,6 @@ def TouchNet_eval(args):
 
     #normalize displacement to [-1,1]
     displacement_norm = (displacement - displacement_min) / (displacement_max - displacement_min)
-
     #normalize coordinates to [-1,1]
     vertex_coordinates = (vertex_coordinates - vertex_min) / (vertex_max - vertex_min)
     

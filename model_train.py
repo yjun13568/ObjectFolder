@@ -32,22 +32,25 @@ from taxim_render import TaximRender
 from PIL import Image
 import TouchNet_utils
 import TouchNet_model
+from taxim_render import TaximRender
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--mode", type=str, default="train")
+parser.add_argument("--mode", type=str, default="train", help='Choose train mode')
 parser.add_argument("-obj", nargs='?', default='model',
                     help="Name of Object to be tested, supported_objects_list = [square, cylinder6]")
 parser.add_argument('-obj_path', default = './demo', type=str, help='Directory containing object point cloud')
-parser.add_argument('-depth', default = 1.0, type=float, help='Indetation depth into the gelpad.')
-parser.add_argument('-obj_scale_factor', default = 1000.0, type=float, help='Scale factor to multiply to object before simulation.')
+parser.add_argument('-depth', default = 3.0, type=float, help='Indetation depth into the gelpad.')
+parser.add_argument('-obj_scale_factor', default = 700.0, type=float, help='Scale factor to multiply to object before simulation.')
 parser.add_argument('-depth_range_info', default = [0.1, 1.5, 100.], type=float, help='Indetation depth range information (min_depth, max_depth, num_range) into the gelpad.', nargs=3)
 parser.add_argument('-slide_range_info', default = [-100., 100., -100., 100., 100., 1.0], type=float, help='Sliding range information (min_x, max_x, min_y, max_y, num_range, press_depth) into the gelpad.', nargs=6)
 parser.add_argument('-rot_range_info', default = [0.3, 0.3, 0.3, 100., 1.0], type=float, help='Rotating range information (yaw_amplitude, pitch_amplitude, roll_amplitude, num_range, press_depth) into the gelpad.', nargs=5)
 parser.add_argument('-contact_point', default = None, type=float, help='Contact point location', nargs=3)
 parser.add_argument('-contact_theta', default = None, type=float, help='Contact point rotation angle')
 
+parser.add_argument("--sample_ply", type=str, default="model.ply", help='ply file for dataset')
+parser.add_argument("--object_model", type=str, default="ObjectFile.pth", help='model path')
 parser.add_argument("--object_file_path", type=str, default="demo/ObjectFile.pth", help='ObjectFile path')
 parser.add_argument('--touch_vertices_file_path', default='./demo/touch_vertices.npy', help='The path of the testing vertices file for touch, which should be a npy file.')
 parser.add_argument('--touch_gelinfo_file_path', default='./demo/touch_gelinfo.npy', help='The path of the gel configurations for touch, which should be a npy file.')
@@ -771,7 +774,7 @@ def TouchNet_train(args):
     depth_max = 0.04
     depth_min = 0.0339
     displacement_min = 0.0005
-    displacement_max = 0.0020
+    displacement_max = 0.0100
     depth_max = 0.04
     depth_min = 0.0339
     rgb_width = 120
@@ -782,15 +785,16 @@ def TouchNet_train(args):
     vertex_min = checkpoint['TouchNet']['xyz_min']
     vertex_max = checkpoint['TouchNet']['xyz_max']
 
-    pcd_Path = os.path.join('demo', 'model.ply')
+    pcd_Path = os.path.join(args.obj_path, 'dataset', args.sample_ply)
     pcd = o3d.io.read_point_cloud(pcd_Path)
-    vertex_coordinates = np.asarray(pcd.points)
-    print(vertex_coordinates.shape)
+    vertex_coordinates_raw = np.asarray(pcd.points)
+    print(vertex_coordinates_raw.shape)
     
     # vertex_coordinates = np.load(args.touch_vertices_file_path)
-    N = vertex_coordinates.shape[0]
+    N = vertex_coordinates_raw.shape[0]
     # gelinfo_data = np.load(args.touch_gelinfo_file_path)
     zero = np.zeros((N,3))
+    zero[:, 2] = 0.001 * args.depth
     theta, phi, displacement = zero[:, 0], zero[:, 1], zero[:, 2]
     phi_x = np.cos(phi)
     phi_y = np.sin(phi)
@@ -802,7 +806,7 @@ def TouchNet_train(args):
     displacement_norm = (displacement - displacement_min) / (displacement_max - displacement_min)
 
     #normalize coordinates to [-1,1]
-    vertex_coordinates = (vertex_coordinates - vertex_min) / (vertex_max - vertex_min)
+    vertex_coordinates = (vertex_coordinates_raw - vertex_min) / (vertex_max - vertex_min)
     
     #initialize horizontal and vertical features
     w_feats = np.repeat(np.repeat(np.arange(rgb_width).reshape((rgb_width, 1)), rgb_height, axis=1).reshape((1, 1, rgb_width, rgb_height)), N, axis=0)
@@ -851,7 +855,7 @@ def TouchNet_train(args):
     #testsavedir = args.touch_results_dir
     #os.makedirs(testsavedir, exist_ok=True)
     
-    data_folder = osp.join(osp.join( "..", "Taxim", "calibs"))
+    data_folder = osp.join("calibs")
     filePath = args.obj_path
     gelpad_model_path = osp.join( 'calibs', 'gelmap5.npy')
 
@@ -864,43 +868,27 @@ def TouchNet_train(args):
     dx = 0
     dy = 0
     
-    optimizer = optim.Adam(model.parameters(), lr=1e-4)
-    scheduler = ReduceLROnPlateau(optimizer, "min")
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    scheduler = ReduceLROnPlateau(optimizer, "min", patience=5)
     criterion = nn.L1Loss()
 
     pixels_per_image = rgb_width * rgb_height
-    print(f">>> Start training on {N} Samples...")
+    print(f">>> Start collecting data on {N} Samples...")
     pbar = tqdm(range(N))
     for i in pbar:         
         start_idx = i * pixels_per_image
         end_idx = (i + 1) * pixels_per_image
 
         # Ground Truth (GT) (Simulator)
-        #raw_vertices = np.load(args.touch_vertices_file_path)
-        raw_vertices = np.asarray(pcd.points)
+        raw_vertices = vertex_coordinates_raw
         raw_height_map, _, _, _, _, _, _ = sim.generateHeightMap(gelpad_model_path, press_depth, dx, dy, contact_point=raw_vertices[i], contact_theta=0.)
         height_map = cv2.resize(raw_height_map, (rgb_height, rgb_width))
         height_map = (height_map - height_map.min()) / (height_map.max() - height_map.min() + 1e-6)
         height_map = 1 - height_map
         
-        #height_savePath = os.path.join('results', 'GT', obj + '_raw_height_' + str(i) + '.jpg')
-        #cv2.imwrite(height_savePath, height_map*255)
-        
+        # GT tensor
         gt[start_idx:end_idx] = height_map.reshape(-1,1)
-        '''
-        # train for each image
-        inputs = torch.Tensor(data[start_idx:end_idx]).to(device)
-        embedded = embed_fn(inputs)
-        preds = model(embedded) # 0 ~ 1
-
-        raw = preds.detach().cpu().numpy()
-        raw = (raw - raw.min()) / (raw.max() - raw.min() + 1e-6)
-        raw = raw * 255
-        raw_height_preds = raw.reshape((rgb_width, rgb_height))
-        height_preds_savePath = os.path.join('results', 'Pr', obj + '_raw_height_' + str(i) + '.jpg')
-        cv2.imwrite(height_preds_savePath, raw_height_preds)
-        '''
-    
+        
     
     gt_tensor = torch.tensor(gt).to(device).reshape(-1,1)
     inputs = torch.Tensor(data).to(device)
@@ -961,14 +949,14 @@ def TouchNet_train(args):
 
 def TouchNet_eval(args):
 
-    checkpoint = torch.load(args.object_file_path)
-    checkpoint_finetuned = torch.load(os.path.join(args.obj_path, 'finetuned_model.pth'))
+    checkpoint = torch.load(args.object_file_path)      # Original model
+    checkpoint_finetuned = torch.load(os.path.join(args.obj_path, args.object_model))       #Train model
 
     rotation_max = 15
     depth_max = 0.04
     depth_min = 0.0339
     displacement_min = 0.0005
-    displacement_max = 0.0020
+    displacement_max = 0.0100
     depth_max = 0.04
     depth_min = 0.0339
     rgb_width = 120
@@ -981,10 +969,23 @@ def TouchNet_eval(args):
     vertex_min_finetuned = checkpoint['TouchNet']['xyz_min']
     vertex_max_finetuned = checkpoint['TouchNet']['xyz_max']
 
-    vertex_coordinates_raw = np.load(args.touch_vertices_file_path)
+    pcd_Path = os.path.join(args.obj_path, 'dataset', args.sample_ply)
+    pcd = o3d.io.read_point_cloud(pcd_Path)
+    pcd_vertices = np.asarray(pcd.points)
+    if args.sample_ply == 'testcase.ply':
+        vertex_coordinates_raw = pcd_vertices[:15]
+    else:
+        size = 15
+        if pcd_vertices.shape[0] < 15:
+            size = pcd_vertices.shape[0]
+        random_index = np.random.choice(pcd_vertices.shape[0], size=size, replace=False)
+        vertex_coordinates_raw = pcd_vertices[random_index]
     N = vertex_coordinates_raw.shape[0]
-    gelinfo_data = np.load(args.touch_gelinfo_file_path)
-    theta, phi, displacement = gelinfo_data[:, 0], gelinfo_data[:, 1], gelinfo_data[:, 2]
+
+    #gelinfo_data = np.load(args.touch_gelinfo_file_path)
+    zero = np.zeros((N,3))
+    zero[:, 2] = 0.001 * args.depth
+    theta, phi, displacement = zero[:, 0], zero[:, 1], zero[:, 2]
     phi_x = np.cos(phi)
     phi_y = np.sin(phi)
     
@@ -1049,14 +1050,27 @@ def TouchNet_eval(args):
     #testsavedir = args.touch_results_dir
     #os.makedirs(testsavedir, exist_ok=True)
     
-    data_folder = osp.join(osp.join( "..", "Taxim", "calibs"))
+    data_folder = osp.join("calibs")
     filePath = args.obj_path
-    gelpad_model_path = osp.join( '..', 'Taxim', 'calibs', 'gelmap5.npy')
+    gelpad_model_path = osp.join('calibs', 'gelmap5.npy')
 
     os.makedirs(os.path.join(args.obj_path, 'sim_img'), exist_ok=True)
     os.makedirs(os.path.join(args.obj_path, 'shadow_img'), exist_ok=True)
-    os.makedirs(os.path.join(args.obj_path, 'height_img'), exist_ok=True)
+    os.makedirs(os.path.join(args.obj_path, 'rgb_height_img'), exist_ok=True)
     os.makedirs(os.path.join(args.obj_path, 'normal_img'), exist_ok=True)
+    os.makedirs(os.path.join(args.obj_path, 'color_img'), exist_ok=True)
+    os.makedirs(os.path.join(args.obj_path, 'height_img'), exist_ok=True)
+
+    DeleteAllFiles(os.path.join(args.obj_path, 'sim_img'))
+    DeleteAllFiles(os.path.join(args.obj_path, 'shadow_img'))
+    DeleteAllFiles(os.path.join(args.obj_path, 'rgb_height_img'))
+    DeleteAllFiles(os.path.join(args.obj_path, 'normal_img'))
+    DeleteAllFiles(os.path.join(args.obj_path, 'color_img'))
+    DeleteAllFiles(os.path.join(args.obj_path, 'height_img'))
+
+    DeleteAllFiles(os.path.join('results', 'Pr'))
+    DeleteAllFiles(os.path.join('results', 'Pr_finetuned'))
+    DeleteAllFiles(os.path.join('results', 'finetuned'))
 
     obj = args.obj + '.obj'
     tac_sim = mesh_simulator
@@ -1065,7 +1079,8 @@ def TouchNet_eval(args):
     press_depth = args.depth
     dx = 0
     dy = 0
-    
+    taxim = TaximRender("./calibs/")
+
     criterion = nn.L1Loss()
     loss = []
     loss_finetuned = []
@@ -1081,23 +1096,26 @@ def TouchNet_eval(args):
         end_idx = (i + 1) * pixels_per_image
 
         # Ground Truth (GT) (Simulator)
-        raw_vertices = np.load(args.touch_vertices_file_path)
-        height_map, gel_map, contact_mask, _, _, vis_raw_normal_map, raw_height_map = sim.generateHeightMap(gelpad_model_path, press_depth, dx, dy, contact_point=raw_vertices[i], contact_theta=0.)
+        raw_vertices = vertex_coordinates_raw
+        height_map, gel_map, contact_mask, raw_color_map, _, vis_raw_normal_map, raw_height_map = sim.generateHeightMap(gelpad_model_path, press_depth, dx, dy, contact_point=raw_vertices[i], contact_theta=0.)
         heightMap, contact_mask, contact_height = sim.deformApprox(press_depth, height_map, gel_map, contact_mask)
         sim_img, shadow_sim_img = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
 
-        
         height_map_rgb = colormaps.get_cmap("viridis")((raw_height_map - raw_height_map.min()) / (raw_height_map.max() - raw_height_map.min() + 1e-6))
         height_map_rgb = (height_map_rgb * 255).astype(np.uint8)
         raw_normal_img = (vis_raw_normal_map * 255).astype(np.uint8)
+        raw_color_img = np.astype(raw_color_map * 255, np.uint8)
 
-        height_savePath = os.path.join(args.obj_path, 'height_img', f'{i+1}.png')
+        height_savePath = os.path.join(args.obj_path, 'rgb_height_img', f'{i+1}.png')
         raw_normal_savePath = os.path.join(args.obj_path, 'normal_img', f'{i+1}.png')
+        raw_color_savePath = os.path.join(args.obj_path, 'color_img', f'{i+1}.png')
+
         img_savePath = os.path.join(args.obj_path, 'sim_img', f'{i+1}.png')
         shadow_savePath = os.path.join(args.obj_path, 'shadow_img', f'{i+1}.png')
 
         cv2.imwrite(height_savePath, cv2.cvtColor(height_map_rgb, cv2.COLOR_RGB2BGR))
         cv2.imwrite(raw_normal_savePath, cv2.cvtColor(raw_normal_img, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(raw_color_savePath, cv2.cvtColor(raw_color_img, cv2.COLOR_RGB2BGR))
         cv2.imwrite(img_savePath, sim_img)
         cv2.imwrite(shadow_savePath, shadow_sim_img)
 
@@ -1106,13 +1124,12 @@ def TouchNet_eval(args):
         height_map = (height_map - height_map.min()) / (height_map.max() - height_map.min() + 1e-6)
         height_map = 1 - height_map
         
-        gt_path = os.path.join(args.obj_path, f"{i+1}.png")
+        gt_path = os.path.join(args.obj_path, 'height_img', f"{i+1}.png")
         gt_height_map = (height_map * 255).astype(np.uint8)
         cv2.imwrite(gt_path, gt_height_map)
 
-        #height_savePath = os.path.join('results', 'GT', obj + '_raw_height_' + str(i) + '.jpg')
-        #cv2.imwrite(height_savePath, height_map*255)
         
+        # Groud Truth data
         gt = height_map.reshape(-1,1)
         gt_tensor = torch.tensor(gt).to(device).reshape(-1,1)
 
@@ -1124,25 +1141,31 @@ def TouchNet_eval(args):
         embedded_finetuned = embed_fn_finetuned(inputs_finetuned)
         preds_finetuned = model_finetuned(embedded_finetuned)
     
-        
+        # Original model prediction height image
         results = preds.detach().cpu().numpy()
         results = 255 * (results - results.min()) / (results.max() - results.min() + 1e-6)
         results = results.reshape((rgb_width, rgb_height)) 
         preds_savePath = os.path.join('results', 'Pr', obj + '_raw_height_' + str(i+1) + '.jpg')
         cv2.imwrite(preds_savePath, results)
         
-        results_finetuned = preds_finetuned.detach().cpu().numpy()
-        results_finetuned = 255 * (results_finetuned - results_finetuned.min()) / (results_finetuned.max() - results_finetuned.min() + 1e-6)
+        # Trained model prediction tactile & height image
+        raw_results_finetuned = preds_finetuned.detach().cpu().numpy()
+        results_finetuned = raw_results_finetuned * (depth_max - depth_min) + depth_min
         results_finetuned = results_finetuned.reshape((rgb_width, rgb_height))
+        _, _, tactile_map = taxim.render(results_finetuned, displacement[i])
+        cv2.imwrite(os.path.join('results', 'finetuned', f'{i+1}.png'), tactile_map)
+
+        height_results_finetuned = 255 * (raw_results_finetuned - raw_results_finetuned.min()) / (raw_results_finetuned.max() - raw_results_finetuned.min() + 1e-6)
+        height_results_finetuned = height_results_finetuned.reshape((rgb_width, rgb_height))
         
         preds_savePath = os.path.join('results', 'Pr_finetuned', obj + '_raw_height_' + str(i+1) + '.jpg')
-        cv2.imwrite(preds_savePath, results_finetuned)
+        cv2.imwrite(preds_savePath, height_results_finetuned)
 
         loss.append(float(criterion(preds, gt_tensor).item()))
         loss_finetuned.append(float(criterion(preds_finetuned, gt_tensor).item()))
 
 
-    
+    # Loss compare Graph
     x = np.arange(1, N + 1)
     plt.figure(figsize=(10, 6))
     plt.bar(x - 0.2, loss, width=0.4, label='original Loss', color='blue')
@@ -1161,57 +1184,69 @@ def TouchNet_eval(args):
     sim.normal_renderer.delete()
 
 
+def DeleteAllFiles(filePath):
+    if os.path.exists(filePath):
+        for file in os.scandir(filePath):
+            os.remove(file.path)
+        return 'Remove All Files'
+    else:
+        return 'Directory Not Found'
+
+
 if __name__ == "__main__":
-    '''
-    data_folder = osp.join(osp.join( "..", "calibs"))
-    filePath = osp.join('..', 'data', 'objects') if args.obj_path is None else args.obj_path
-    gelpad_model_path = osp.join( '..', 'calibs', 'gelmap5.npy')
-
-    torch.set_default_tensor_type('torch.cuda.FloatTensor')
-
-
-    obj = args.obj + '.obj'
-    tac_sim = mesh_simulator
-
-    sim = tac_sim(data_folder, filePath, obj, args.obj_scale_factor)
-    press_depth = args.depth
-    dx = 0
-    dy = 0
-    
-    # generate height map
-    # height_map, gel_map, contact_mask, raw_color_map, raw_normal_map, vis_raw_normal_map, raw_height_map = sim.generateHeightMap(gelpad_model_path, press_depth, dx, dy, contact_point=contact_point, contact_theta=args.contact_theta)
-    # approximate the soft deformation
-    #heightMap, contact_mask, contact_height = sim.deformApprox(press_depth, height_map, gel_map, contact_mask)
-    # simulate tactile images
-    #sim_img, shadow_sim_img = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
-    #img_savePath = osp.join('..', 'results', obj[:-4]+'_sim.jpg')
-    #shadow_savePath = osp.join('..', 'results', obj[:-4]+'_shadow.jpg')
-    height_savePath = osp.join('..', 'results', obj[:-4]+'_raw_height.jpg')
-
-    raw_color_savePath = osp.join('..', 'results', obj[:-4]+'_raw_color.jpg')
-    raw_normal_savePath = osp.join('..', 'results', obj[:-4]+'_raw_normal.jpg')
-    raw_color_img = np.astype(raw_color_map * 255, np.uint8)
-    raw_normal_img = np.astype(vis_raw_normal_map * 255, np.uint8)
-
-    #cv2.imwrite(img_savePath, sim_img)
-    #cv2.imwrite(shadow_savePath, shadow_sim_img)
-    '''
     if(args.mode == 'train'):
         TouchNet_train(args=args)
     
-    elif(args.mode == 'loss'):
+    elif(args.mode == 'eval'):
         TouchNet_eval(args=args)
     
+    elif(args.mode == 'comp'):
+        filePath = './comp'
+        '''
+        object_number = 76
+        
+        height_0 = cv2.imread(os.path.join('./comp', object_number, '0.png'))
+        sim_0 = cv2.imread(os.path.join('./comp', object_number, 'sim0.png'))
+        height_10 = cv2.imread(os.path.join('./comp', object_number, '10.jpg'))
+        sim_10 = cv2.imread(os.path.join('./comp', object_number, 'sim10.png'))
+        height_50 = cv2.imread(os.path.join('./comp', object_number, '50.jpg'))
+        sim_50 = cv2.imread(os.path.join('./comp', object_number, 'sim50.png'))
+        height_250 = cv2.imread(os.path.join('./comp', object_number, '254.jpg'))
+        sim_250 = cv2.imread(os.path.join('./comp', object_number, 'sim254.png'))
+        height_1000 = cv2.imread(os.path.join('./comp', object_number, '1002.jpg'))
+        sim_1000 = cv2.imread(os.path.join('./comp', object_number, 'sim1002.png'))
+        #height_2000 = cv2.imread(os.path.join('./comp/76', '2008.jpg'))
+        #sim_2000 = cv2.imread(os.path.join('./comp/76', 'sim2008.png'))
 
-    '''
-    norm_raw_height_map = colormaps.get_cmap("viridis")((raw_height_map - raw_height_map.min()) / (raw_height_map.max() - raw_height_map.min() + 1e-6))
-    norm_raw_height_map = np.astype(norm_raw_height_map * 255, np.uint8)
-    cv2.imwrite(height_savePath, cv2.cvtColor(norm_raw_height_map, cv2.COLOR_RGB2BGR))
+        fig = plt.figure(figsize=(10,6), dpi=100)
+        fig.tight_layout()
+        rows = 2
+        cols = 6
+        xlabel = ['GT', 'sim', '10 samples', 'sim', '50 samples', 'sim', '254 samples', 'sim', '1002 samples', 'sim']
+        img_list = [height_0, sim_0, height_10, sim_10, height_50, sim_50, height_250, sim_250, height_1000, sim_1000]
+        i = 0
 
-    cv2.imwrite(raw_color_savePath, cv2.cvtColor(raw_color_img, cv2.COLOR_RGB2BGR))
-    cv2.imwrite(raw_normal_savePath, cv2.cvtColor(raw_normal_img, cv2.COLOR_RGB2BGR))
-    
+        
+        for n in range(rows):
+            for m in range(cols):            
+                if n == 0:
+                    ax = fig.add_subplot(rows, cols, n*6 + m+1)
+                    ax.imshow(cv2.cvtColor(img_list[i], cv2.COLOR_BGR2RGB))
+                    ax.set_xlabel(xlabel[i])
+                    ax.set_xticks([]), ax.set_yticks([])
+                    i+=1
+                elif n == 1 and m > 1:
+                    ax = fig.add_subplot(rows, cols, n*6 + m+1)
+                    ax.imshow(cv2.cvtColor(img_list[i], cv2.COLOR_BGR2RGB))
+                    ax.set_xlabel(xlabel[i])
+                    ax.set_xticks([]), ax.set_yticks([])
+                    i+=1
+                
+        plt.suptitle(f'#{object_number} Testcase 13')
+        plt.tight_layout()
+        plt.savefig(f'./comp/#{object_number} Testcase 13 Compare.png')
+        plt.show()
+        '''
 
-    sim.renderer.delete()
-    sim.normal_renderer.delete()
-    '''
+
+
