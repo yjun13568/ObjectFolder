@@ -932,15 +932,16 @@ def TouchNet_train(args):
     #plt.grid(True)
     plt.legend()
     
-    loss_plot_path = os.path.join(filePath, f"Training Loss {N} Samples.png")
+    ply_name = args.sample_ply.split('.')
+    loss_plot_path = os.path.join(filePath, f"Training Loss {ply_name[0]} Samples.png")
     plt.savefig(loss_plot_path)
-    plt.show()
+    #plt.show()
 
     new_weights = model.state_dict()
 
     checkpoint['TouchNet']['model_state_dict'] = new_weights
     print(">>> Saving the trained model...")
-    save_path = os.path.join(filePath, f"finetuned_model_{N}.pth")
+    save_path = os.path.join(filePath, f"finetuned_model_{ply_name[0]}.pth")
     torch.save(checkpoint, save_path)
 
     sim.renderer.delete()
@@ -980,6 +981,7 @@ def TouchNet_eval(args):
             size = pcd_vertices.shape[0]
         random_index = np.random.choice(pcd_vertices.shape[0], size=size, replace=False)
         vertex_coordinates_raw = pcd_vertices[random_index]
+    vertex_coordinates_raw = np.asarray([[-0.009997,0.009172,-0.000286]])
     N = vertex_coordinates_raw.shape[0]
 
     #gelinfo_data = np.load(args.touch_gelinfo_file_path)
@@ -1098,13 +1100,21 @@ def TouchNet_eval(args):
         # Ground Truth (GT) (Simulator)
         raw_vertices = vertex_coordinates_raw
         height_map, gel_map, contact_mask, raw_color_map, _, vis_raw_normal_map, raw_height_map = sim.generateHeightMap(gelpad_model_path, press_depth, dx, dy, contact_point=raw_vertices[i], contact_theta=0.)
+        #print(f"Min: {height_map.min()}, Max: {height_map.max()}")
+        is_TDF = False
+        if is_TDF:
+            height_map = np.load(os.path.join(args.obj_path, '36_height_map_resize_7.npy'))
+            height_map += 200
+            print(f"Min: {height_map.min()}, Max: {height_map.max()}")
+            contact_mask[:,:] = 1
+
         heightMap, contact_mask, contact_height = sim.deformApprox(press_depth, height_map, gel_map, contact_mask)
         sim_img, shadow_sim_img = sim.simulating(heightMap, contact_mask, contact_height, shadow=True)
-
+        
         height_map_rgb = colormaps.get_cmap("viridis")((raw_height_map - raw_height_map.min()) / (raw_height_map.max() - raw_height_map.min() + 1e-6))
         height_map_rgb = (height_map_rgb * 255).astype(np.uint8)
         raw_normal_img = (vis_raw_normal_map * 255).astype(np.uint8)
-        raw_color_img = np.astype(raw_color_map * 255, np.uint8)
+        raw_color_img = (raw_color_map * 255).astype(np.uint8)
 
         height_savePath = os.path.join(args.obj_path, 'rgb_height_img', f'{i+1}.png')
         raw_normal_savePath = os.path.join(args.obj_path, 'normal_img', f'{i+1}.png')
@@ -1178,7 +1188,7 @@ def TouchNet_eval(args):
     
     loss_plot_path = os.path.join('results/finetuned', "Loss Compare.png")
     plt.savefig(loss_plot_path)
-    plt.show()
+    #plt.show()
 
     sim.renderer.delete()
     sim.normal_renderer.delete()
